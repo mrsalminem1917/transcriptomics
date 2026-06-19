@@ -1,4 +1,4 @@
-######################################################### Uploading data
+######################################################### PACKAGES
 chooseCRANmirror()
 BiocManager::install('EnhancedVolcano')
 suppressPackageStartupMessages(library(EnhancedVolcano))
@@ -9,8 +9,9 @@ suppressPackageStartupMessages(library(pheatmap))
 suppressPackageStartupMessages(library(DESeq2))
 suppressPackageStartupMessages(library(org.Hs.eg.db))
 suppressPackageStartupMessages(library(patchwork))
+suppressPackageStartupMessages(library(sva))
 
-########################
+######################################################### Uploading data
 
 setwd("/home/student/storage/AnTrD_personal_task/")
 metadata <- read.table('metadata.tsv', header = TRUE)
@@ -23,27 +24,18 @@ raw_counts <- lapply(metadata$FeaturePath, function(path){
 colnames(raw_counts) <- metadata$Sample
 identical(colnames(raw_counts),rownames(metadata))
 
+metadata$Group <- factor(metadata$Group, levels = c("young", "old")) 
+metadata$Sex <- factor(metadata$Sex, levels = unique(metadata$Sex))
+
 
 ###### REMOVE OUTLIERS
 
-raw_counts <- raw_counts[, !(colnames(raw_counts) %in% c("SRR13388751"))] #"SRR13388736"
+raw_counts <- raw_counts[, !(colnames(raw_counts) %in% c("SRR13388751"))]
 metadata <- metadata %>%
   filter(!Sample %in% c("SRR13388751"))
 
-######################
 
-metadata$Group <- factor(metadata$Group, levels = c("young", "old")) 
-metadata$Sex <- factor(metadata$Sex, levels = unique(metadata$Sex))
-#metadata$Splice <- c(7184292, 15102220, 6288151, 9141049, 13762893, 7410666, 11548654, 10753811, 7602493, 12801877)
-#metadata$Depth <- c(44186692, 49659198, 35204411, 53877644, 113363405, 43964127, 56014356, 116732027, 36377529, 53696405)
-#metadata$Batch <- metadata$Splice/metadata$Depth
-#metadata$Dev <- metadata$Splice/metadata$Depth
-#metadata$Batch <- c("low", "medium", "low", "medium", "high", "low", "medium", "high", "low", "medium")
-#metadata$Batch <- factor(metadata$Batch, levels = c("low", "medium", "high"))
-#metadata$Batch <- as.numeric(scale(metadata$Batch))
-#metadata$Batch <- cut(metadata$Batch, breaks = 2, labels = c("low", "high"))
-
-############################################################# DESEQ2
+############################################################# DESEQ2 NORM
 
 design_matrix <- ~Sex + Group
 
@@ -60,12 +52,10 @@ idx <- filterByExpr(counts(dds, normalized=TRUE),
                    design = design_matrix,
                    group = metadata$Group,
                    min.count = 10)
-#idx <- rowSums(raw_counts >= 5 ) >= 5
 dds <- dds[idx, ]
 
 
 ################################################################### SVA
-#https://biodatascience.github.io/compbio/dist/sva.html
 
 norm_counts <- counts(dds, normalized=TRUE)
 mod <- model.matrix(~ Sex + Group, data = metadata)
@@ -80,7 +70,7 @@ colData(dds)$SV2 <- fit$sv[,2]
 design(dds) <- ~ Sex + SV1 + SV2 + Group
 
 
-##########################
+########################## PCA W/O BATCH CORRECTION
 vsd <- varianceStabilizingTransformation(dds)
 vsd <- assay(vsd)
 
@@ -91,43 +81,22 @@ pca_df <- data.frame(PC1 = pca$x[, 1],
                      PC2 = pca$x[, 2],
                      group = metadata$Group,
                      sample_id = metadata$Sample,
-                     #batch = metadata$Batch,
                      sex = metadata$Sex)
-
-#pca_FC<-ggplot(pca_df,aes(x = PC1, y = PC2, color = group ,label=sample_id)) +
-  #geom_text(hjust=0, vjust=0,show.legend = F,size=3)+
-  #xlab(paste0('PC1 ',summary(pca)$importance[2,1]))+ylab(paste0('PC2 ',summary(pca)$importance[2,2]))+
-  #geom_point(size = 3) + #scale_color_manual(values = brewer.pal(4,'Set1')[1:2]) +#stat_ellipse()+
-  #theme_bw() + coord_cartesian(clip = "off") #+ xlim(-90, 120) 
-#pca_FC
 
 p1 <- ggplot(pca_df,aes(x = PC1, y = PC2, color = sex,label=sample_id)) +
   geom_text(hjust=0, vjust=0,show.legend = F,size=3)+
   xlab(paste0('PC1 ',summary(pca)$importance[2,1]))+ylab(paste0('PC2 ',summary(pca)$importance[2,2]))+
-  geom_point(size = 2) + xlim(-60, 60) 
+  geom_point(size = 2) + xlim(-60, 60)+ #+ ylim(-30, 30)
   theme_bw()
 p2 <- ggplot(pca_df,aes(x = PC1, y = PC2, color = group,label=sample_id)) +
   geom_text(hjust=0, vjust=0,show.legend = F,size=3)+
   xlab(paste0('PC1 ',summary(pca)$importance[2,1]))+ylab(paste0('PC2 ',summary(pca)$importance[2,2]))+
-  geom_point(size = 2) + xlim(-60, 60) 
+  geom_point(size = 2) + xlim(-60, 60)+ #+ ylim(-30,30)
   theme_bw()
 
 pca_graph <- p1+p2
-ggsave("./results/pca_graph_without_remove_batch_effect.png", plot = pca_graph, width = 10, height = 5)
+ggsave("./results/pca_graph_without_outlier.png", plot = pca_graph, width = 10, height = 5)
 
-#########################################################
-#design_matrix <- model.matrix(~ Group, data = metadata)
-
-# С помощью limma временно "вычитаем" эффекты пола и плавающего качества библиотек ТОЛЬКО для красивого графика
-
-#mat_corrected <- removeBatchEffect(
- # vsd, 
- # batch = colData(dds)$Sex, 
-  #covariates = colData(dds)$SV1,
-  #design = design_matrix)
-
-# Строим новый MDS на очищенной матрице
-#plotMDS(mat_corrected, col=ifelse(colData(dds)$Group == "young", "cyan4", "violetred"))
 
 ############################################################### PCA REMOVE BATCH EFFECT
 #Remove batch-effect from vsd for visualization
@@ -163,7 +132,7 @@ wobatch <- ggplot(pca_df,aes(x = PC1, y = PC2, color = condition,label=sample_id
 
 ggsave("./results/pca_graph_wo_batch_effect.png", plot = wobatch, width = 10, height = 5)
 
-################################################
+################################################ MDS
 
 # Classical MDS
 # N rows (objects) x p columns (variables)
@@ -196,15 +165,15 @@ ggsave("./results/mds_wo_batch_effect.png", plot = mds, width = 10, height = 5)
 ######################### CORR
 PCC_vsd<-cor(vsd,method = 'pearson')
 SCC_vsd<-cor(vsd,method = 'spearman')
-pheatmap(PCC_vsd, main = "PCC_vsd")
+per <- pheatmap(PCC_vsd, main = "PCC_vsd")
 spearman <- pheatmap(SCC_vsd, main = "SCC_vsd")
 
 ggsave("./results/spearman.png", plot = spearman, width = 10, height = 5)
 
-############################
+############################ HEATMAP
 
 calc_CV <- function(x) {sd(x) / mean(x)}
-CV_dat <- apply(vsd,1,calc_CV)
+CV_dat <- apply(vsd_nobatch,1,calc_CV)
 
 # show the highest CD genes and their CV values
 sort(CV_dat, decreasing = TRUE)[1:5]
@@ -227,7 +196,7 @@ largeheatmap <- pheatmap(vsd[GOI,],
          annotation_col = 
            colData(dds)[, c("Group", "Sex"),drop=F]%>%as.data.frame())
 
-ggsave("./results/largeheatmap.png", plot = largeheatmap, width = 10, height = 5)
+ggsave("./results/largeheatmap_with_removebatcheff.png", plot = largeheatmap, width = 10, height = 5)
 
 ####################################################
 #Create gct object for Phantasus
@@ -265,20 +234,6 @@ top20 <-pheatmap(DEGs,
 ggsave("./results/top20.png", plot = top20, width = 10, height = 5)
 #dev.off()
 
-########################### MDS
-
-d <- dist(t(vsd))
-fit <- MASS::isoMDS(d, k=2) # k is the number of dim
-mds_df<-data.frame(MDS1=fit$points[,1],
-                   MDS2=fit$points[,2],
-                   group=metadata$Group,
-                   sample_id=metadata$Sample)
-ggplot(mds_df,aes(x = MDS1, y = MDS2, color = group,label=sample_id)) +
-  geom_text(hjust=0, vjust=0,show.legend = F,size=3)+
-  xlab('MDS1')+ylab('MDS2')+
-  geom_point(size = 2) + #scale_color_manual(values = brewer.pal(4,'Set1')[1:2]) +#stat_ellipse()+
-  theme_bw()
-
 ######################################################### DESEQ WALD
 
 design(dds)
@@ -292,11 +247,10 @@ gene_names <- data.frame(
   entrez = mapIds(org.Hs.eg.db, sub("\\..*$", "", rownames(Group_young_vs_old)), "ENTREZID", "ENSEMBL"),
   row.names = rownames(Group_young_vs_old)) %>% mutate(across(.fns=as.character))
 Group_young_vs_old <- cbind(gene_names, Group_young_vs_old)
+
 top_genes <- Group_young_vs_old %>% 
   filter(padj < 0.05 & abs(log2FoldChange) > 1) %>%
   arrange(padj)
-
-View(top_genes)
 
 as.vector(top_genes$symbol[!is.na(top_genes$symbol)])
 
@@ -305,19 +259,11 @@ top_genes<- Group_young_vs_old %>%
   mutate(Direction = ifelse(log2FoldChange > 0, "Up", "Down")) %>%
   arrange(desc(log2FoldChange), padj)
 
-top_genes %>% 
-  filter(Direction == "Up") %>%
-  nrow()
 
 top_genes %>% 
   dplyr::select(symbol, log2FoldChange, stat, padj) %>% View
 
-View(top_genes)
 
-
-
-
-getwd()
 write_csv(top_genes, "./results/top_exon_level.csv")
 write_csv(Group_young_vs_old, "./results/all_deg_gene_level.csv")
 
@@ -339,17 +285,13 @@ plot(EnhancedVolcano)
 #dev.off()
 
 
-###########################################################
+##########################################################
 
-
-
-
-
-# Создаем списки генов (замените ddeg_list_2 на ваш второй список генов)
+# Создаем списки генов 
 genes_salmon <- top_genes_salmon[!is.na(top_genes_salmon$symbol), "symbol"]
 genes <- top_genes[!is.na(top_genes$symbol), "symbol"]
 
-c("CDKN2B", "FAM83B", "LG1", "CFAP61", "SKAP2", "C12orf75", "CRIM1", "OXCT1",
+up <- c("CDKN2B", "FAM83B", "LG1", "CFAP61", "SKAP2", "C12orf75", "CRIM1", "OXCT1",
   "NR2F2", "LRP1B", "ENAM", "LPP", "ESRRG", "EDA2R", "KCNQ5", "FAM117B",
   "ZNF844") %>% cat(., sep = "\n")
 
@@ -360,10 +302,6 @@ down <- c(
 article <- c(up, down)
 
 ###############################################
-
-
-getwd()
-setwd("/home/student/storage/AnTrD_personal_task/")
 
 top_genes <- read.csv("./results/top_exon_level.csv")
 top_genes_salmon <- read.csv("./results/top_genes_salmon.csv")
@@ -413,74 +351,4 @@ top_genes_salmon %>%
   arrange(-stat) %>% 
   dplyr::select(symbol, log2FoldChange, stat, padj) %>% View
 
-
-
-
-
-
-############################## ORA
-BiocManager::install("clusterProfiler")
-suppressPackageStartupMessages(library(clusterProfiler))
-suppressPackageStartupMessages(library(org.Hs.eg.db))
-
-msig_hallmarks <- msigdbr(species = "Homo sapiens", category = "H") %>%
-  dplyr::select(gs_name, gene_symbol)
-
-top_genes %>% 
-  filter(!is.na(symbol)) %>%
-  filter(Direction == "Down") %>%
-  dplyr::select(symbol) %>%
-  pull -> query_down
-
-
-hallmark_down_res <- enricher(
-  gene = query_down, 
-  TERM2GENE = msig_hallmarks, 
-  universe = as.vector(na.omit(Group_young_vs_old$symbol)))
-
-dotplot(go_up_res, showCategory = 15, title = "Upregulated GO Biological Processes")
-packageVersion("ggplot2") 
-
-library(devtools)
-install_version("ggplot2", version = "3.5.0", repos = "http://cran.r-project.org")
-
 #############################################
-
-
-library(decoupleR)
-library(msigdbr)
-library(tidyverse)
-
-# Очищаем данные от NA в символах генов
-df_clean <- Group_young_vs_old %>% 
-  filter(!is.na(symbol)) %>% 
-  distinct(symbol, .keep_all = TRUE)
-
-msig_h <- msigdbr(species = "Homo sapiens", category = "H") %>%
-  #dplyr::select(gs_name, gene_symbol) %>%
-  #rename(source = gs_name, target = gene_symbol) %>%
-  distinct(gs_name, gene_symbol)
-
-colnames(msigdbr(species = "Homo sapiens", category = "H"))
-
-# Создаем матрицу: 1 столбец со stat, строки — символы генов
-mat <- as.matrix(df_clean$stat)
-rownames(mat) <- df_clean$symbol
-colnames(mat) <- "Group_young_vs_old"  # Название вашего контраста
-
-# 2. Запускаем ORA
-# n_up = 100 берет топ-100 генов с наибольшим stat (активированные)
-# n_bottom = 100 берет топ-100 генов с наименьшим stat (подавленные)
-ora_h_res <- run_ora(
-  mat = mat,
-  network = msig_h,
-  .source = "gs_name",
-  .target = "gene_symbol",
-  n_up = 100,
-  n_bottom = 100,
-  n_background = nrow(mat), # наш очищенный universe
-  minsize = 5)
-
-# Смотрим результаты
-ora_h_res
-
